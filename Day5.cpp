@@ -1,125 +1,149 @@
-#include "Day.hpp"
-#include <numeric>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cassert>
 
-struct MapEntry {
-	long long destinationRangeStart, sourceRangeStart, length;
-	bool InRange(long long inputValue) const {
-		return inputValue >= sourceRangeStart && inputValue <= sourceRangeStart + length;
+struct Range { long long start, end; };
+struct Mapping { Range from, to; };
+
+bool TryIntersect(const Range& a, const Range& b, Range& intersection) {
+	auto lesser = a, greater = b;
+	if (lesser.start > greater.start)
+		std::swap(lesser, greater);
+	if (lesser.end >= greater.start) {
+		intersection.start = greater.start;
+		intersection.end = std::min(lesser.end, greater.end);
+		return true;
 	}
-	long Convert(long long inputValue) const {
-		return destinationRangeStart + (inputValue - sourceRangeStart);
-	}
-};
-long long Convert(const std::vector<MapEntry>& entries, long long inputValue) {
-	for (auto& entry : entries)
-		if (entry.InRange(inputValue))
-			return entry.Convert(inputValue);
-	return inputValue;
+	else
+		return false;
 }
 
-template<>
-long long Solve<5>(const std::string& input, Part part) {
-
-	std::stringstream ss(input);
-	std::string token;
-	std::vector<long long> seeds;
-	std::vector<std::pair<long long, long long>> seedRanges;
-	std::vector<MapEntry> seedToSoilMap, soilToFertilizerMap, fertilizerToWaterMap, waterToLightMap, lightToTemperatureMap, temperatureToHumidityMap, humidityToLocationMap;
-	std::vector<MapEntry>* targetMap = nullptr;
-
-	while (ss >> token) {
-
-		auto oldTargetMap = targetMap;
-		if (token == "map:" || token == "seeds:") continue;
-		else if (token == "seed-to-soil") targetMap = &seedToSoilMap;
-		else if (token == "soil-to-fertilizer") targetMap = &soilToFertilizerMap;
-		else if (token == "fertilizer-to-water") targetMap = &fertilizerToWaterMap;
-		else if (token == "water-to-light") targetMap = &waterToLightMap;
-		else if (token == "light-to-temperature") targetMap = &lightToTemperatureMap;
-		else if (token == "temperature-to-humidity") targetMap = &temperatureToHumidityMap;
-		else if (token == "humidity-to-location") targetMap = &humidityToLocationMap;
-		if (targetMap != oldTargetMap) continue;
-
-		if (targetMap == nullptr) {
-			if (part == Part::One)
-				seeds.push_back(std::stoll(token));
-			else {
-				long long start, length;
-				ss >> length;
-				start = std::stoll(token);
-				seedRanges.emplace_back(start, length);
-			}
+std::vector<Mapping> SubdivideMapping(const Mapping& inputMapping, const std::vector<Mapping>& mappings) {
+	std::vector<Mapping> result;
+	for (const auto& mapping : mappings) {
+		Range intersection;
+		if (TryIntersect(inputMapping.to, mapping.from, intersection)) {
+			auto offset = mapping.to.start - mapping.from.start;
+			result.push_back(Mapping{ { intersection.start, intersection.end }, { intersection.start + offset, intersection.end + offset } });
 		}
-		else {
-			long long destinationRangeStart, sourceRangeStart, length;
-			ss >> sourceRangeStart >> length;
-			destinationRangeStart = std::stoll(token);
-			targetMap->push_back({destinationRangeStart, sourceRangeStart, length});
-		}
-	}
-
-	std::vector<long long> allSeeds;
-	if (part == Part::One)
-		allSeeds = seeds;
-	else {
-		for (const auto& range : seedRanges)
-			for (auto i = range.first; i < range.first + range.second; i++)
-				allSeeds.push_back(i);
-	}
-
-	long long result = std::numeric_limits<long long>::max();
-	for (auto seed: allSeeds) {
-		auto soil = Convert(seedToSoilMap, seed);
-		auto fertilizer = Convert(soilToFertilizerMap, soil);
-		auto water = Convert(fertilizerToWaterMap, fertilizer);
-		auto light = Convert(waterToLightMap, water);
-		auto temperature = Convert(lightToTemperatureMap, light);
-		auto humidity = Convert(temperatureToHumidityMap, temperature);
-		auto location = Convert(humidityToLocationMap, humidity);
-		result = std::min(result, static_cast<long long>(location));
 	}
 	return result;
 }
 
-template<>
-std::string GetExampleInput<5, 1>() {
-	return "seeds: 79 14 55 13\n"
-		   "\n"
-		   "seed-to-soil map:\n"
-		   "50 98 2\n"
-		   "52 50 48\n"
-		   "\n"
-		   "soil-to-fertilizer map:\n"
-		   "0 15 37\n"
-		   "37 52 2\n"
-		   "39 0 15\n"
-		   "\n"
-		   "fertilizer-to-water map:\n"
-		   "49 53 8\n"
-		   "0 11 42\n"
-		   "42 0 7\n"
-		   "57 7 4\n"
-		   "\n"
-		   "water-to-light map:\n"
-		   "88 18 7\n"
-		   "18 25 70\n"
-		   "\n"
-		   "light-to-temperature map:\n"
-		   "45 77 23\n"
-		   "81 45 19\n"
-		   "68 64 13\n"
-		   "\n"
-		   "temperature-to-humidity map:\n"
-		   "0 69 1\n"
-		   "1 0 69\n"
-		   "\n"
-		   "humidity-to-location map:\n"
-		   "60 56 37\n"
-		   "56 93 4";
+bool TryAddIndentityMapping(const Range& range, std::vector<Mapping>& mappings) {
+	if (range.end < range.start) return false;
+	mappings.push_back(Mapping{ range, range });
+	return true;
+}
+void FillGaps(std::vector<Mapping>& mappings) {
+	std::vector<Mapping> result;
+	std::sort(mappings.begin(), mappings.end(), [](const Mapping& a, const Mapping& b) { return a.from.start < b.from.start; });
+	for (auto i = 0; i < mappings.size(); i++) {
+		const auto& current = mappings[i];
+		if (i == 0)
+			TryAddIndentityMapping({ 0, current.from.start - 1 }, result);
+		else {
+			const auto& previous = mappings[i - 1];
+			TryAddIndentityMapping({ previous.from.end + 1, current.from.start - 1 }, result);
+		}
+		result.push_back(current);
+	}
+	if (mappings.size() > 0) {
+		const auto& last = mappings[mappings.size() - 1];
+		TryAddIndentityMapping({ last.from.end + 1, 9223372036854775000ll }, result);
+	}
+	mappings = std::move(result);
 }
 
-template<>
-void Run<5>() {
-	std::cout << Solve<5>(GetExampleInput<5,1>(), Part::One) << '\n';
-	std::cout << Solve<5>(GetExampleInput<5,1>(), Part::Two) << '\n';
+enum class Part { One, Two };
+
+struct Input {
+	std::vector<Mapping> seeds, seedToSoil, soilToFertilizer, fertilizerToWater, waterToLight, lightToTemperature, temperatureToHumidity, humidityToLocation;
+};
+Input ReadInput(std::istream& input, Part part) {
+
+	std::string token;
+	Input result;
+	std::vector<Mapping>* targetMappingList = nullptr;
+
+	while (input >> token) {
+
+		auto oldTargetMappingList = targetMappingList;
+		if (token == "map:" || token == "seeds:")    continue;
+		else if (token == "seed-to-soil")            targetMappingList = &result.seedToSoil;
+		else if (token == "soil-to-fertilizer")      targetMappingList = &result.soilToFertilizer;
+		else if (token == "fertilizer-to-water")     targetMappingList = &result.fertilizerToWater;
+		else if (token == "water-to-light")          targetMappingList = &result.waterToLight;
+		else if (token == "light-to-temperature")    targetMappingList = &result.lightToTemperature;
+		else if (token == "temperature-to-humidity") targetMappingList = &result.temperatureToHumidity;
+		else if (token == "humidity-to-location")    targetMappingList = &result.humidityToLocation;
+		if (targetMappingList != oldTargetMappingList) continue;
+
+		if (targetMappingList == nullptr) {
+			if (part == Part::One) {
+				auto seed = std::stoll(token);
+				result.seeds.emplace_back(Mapping{ {seed,seed}, {seed,seed} });
+			}
+			else {
+				long long start, length;
+				start = std::stoll(token);
+				input >> length;
+				result.seeds.emplace_back(Mapping{ {start,start+length-1},{start,start + length - 1} });
+			}
+		}
+		else {
+			long long destinationRangeStart, sourceRangeStart, length;
+			input >> sourceRangeStart >> length;
+			destinationRangeStart = std::stoll(token);
+			targetMappingList->push_back({ { sourceRangeStart, sourceRangeStart + length - 1 }, { destinationRangeStart, destinationRangeStart + length - 1 } });
+		}
+	}
+
+	FillGaps(result.seedToSoil);
+	FillGaps(result.soilToFertilizer);
+	FillGaps(result.fertilizerToWater);
+	FillGaps(result.waterToLight);
+	FillGaps(result.lightToTemperature);
+	FillGaps(result.temperatureToHumidity);
+	FillGaps(result.humidityToLocation);
+
+	return result;
+}
+
+int main() {
+
+	std::ifstream file("C:\\Users\\v.fedotov\\source\\repos\\Aoc2023Day5\\Input.txt");
+	assert(file);
+
+	auto input = ReadInput(file, Part::Two);
+	long long result = std::numeric_limits<long long>::max();
+	for (const auto& seed : input.seeds) {
+		std::vector<Mapping> s = SubdivideMapping(seed, input.seedToSoil);
+		for (const auto& it : s) {
+			std::vector<Mapping> s2 = SubdivideMapping(it, input.soilToFertilizer);
+			for (const auto& it2 : s2) {
+				std::vector<Mapping> s3 = SubdivideMapping(it2, input.fertilizerToWater);
+				for (const auto& it3 : s3) {
+					std::vector<Mapping> s4 = SubdivideMapping(it3, input.waterToLight);
+					for (const auto& it4 : s4) {
+						std::vector<Mapping> s5 = SubdivideMapping(it4, input.lightToTemperature);
+						for (const auto& it5 : s5) {
+							std::vector<Mapping> s6 = SubdivideMapping(it5, input.temperatureToHumidity);
+							for (const auto& it6 : s6) {
+								std::vector<Mapping> s7 = SubdivideMapping(it6, input.humidityToLocation);
+								for (const auto& it7 : s7)
+									result = std::min(result, it7.to.start);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	std::cout << result << '\n';
+
+	return 0;
 }
